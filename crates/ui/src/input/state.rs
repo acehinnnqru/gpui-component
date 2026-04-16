@@ -1181,16 +1181,52 @@ impl InputState {
             next_indent.push(c);
         }
 
-        if next_indent.len() > current_indent.len() {
-            return next_indent;
+        let base_indent = if next_indent.len() > current_indent.len() {
+            next_indent
         } else {
-            return current_indent;
+            current_indent
+        };
+
+        let cursor = self.cursor();
+        let char_before_cursor = if cursor > 0 {
+            self.text.char_at(cursor - 1)
+        } else {
+            None
+        };
+
+        if matches!(char_before_cursor, Some('{' | '[' | '(')) {
+            let tab_str = self.mode.tab_size().to_string();
+            return format!("{}{}", base_indent, tab_str);
         }
+
+        base_indent
+    }
+
+    fn cursor_between_brackets(&self) -> bool {
+        let cursor = self.cursor();
+        if cursor == 0 || cursor >= self.text.len() {
+            return false;
+        }
+
+        let before = self.text.char_at(cursor - 1);
+        let after = self.text.char_at(cursor);
+
+        matches!(
+            (before, after),
+            (Some('{'), Some('}')) | (Some('['), Some(']')) | (Some('('), Some(')'))
+        )
     }
 
     pub(super) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_range.is_empty() {
-            self.select_to(self.previous_boundary(self.cursor()), cx)
+            if self.mode.auto_close_brackets() && self.cursor_between_brackets() {
+                let cursor = self.cursor();
+                self.select_to(self.previous_boundary(cursor), cx);
+                let after_closer = cursor + 1;
+                self.selected_range = (self.selected_range.start..after_closer).into();
+            } else {
+                self.select_to(self.previous_boundary(self.cursor()), cx);
+            }
         }
         self.replace_text_in_range(None, "", window, cx);
         self.pause_blink_cursor(cx);
@@ -1309,16 +1345,35 @@ impl InputState {
         }
 
         if self.mode.is_multi_line() {
-            // Get current line indent
+            let between_brackets =
+                self.mode.is_code_editor() && self.cursor_between_brackets();
+
             let indent = if self.mode.is_code_editor() {
                 self.indent_of_next_line()
             } else {
                 "".to_string()
             };
 
-            // Add newline and indent
-            let new_line_text = format!("\n{}", indent);
-            self.replace_text_in_range_silent(None, &new_line_text, window, cx);
+            if between_brackets {
+                let base_indent = {
+                    let current_line_start = self.start_of_line();
+                    let mut s = String::new();
+                    for c in self.text.slice(current_line_start..).chars() {
+                        if !c.is_whitespace() || c == '\n' || c == '\r' {
+                            break;
+                        }
+                        s.push(c);
+                    }
+                    s
+                };
+                let text = format!("\n{}\n{}", indent, base_indent);
+                self.replace_text_in_range_silent(None, &text, window, cx);
+                let new_cursor = self.cursor() - base_indent.len() - 1;
+                self.selected_range = (new_cursor..new_cursor).into();
+            } else {
+                let new_line_text = format!("\n{}", indent);
+                self.replace_text_in_range_silent(None, &new_line_text, window, cx);
+            }
             self.pause_blink_cursor(cx);
         } else {
             // Single line input, just emit the event (e.g.: In a dialog to confirm).
@@ -2316,6 +2371,42 @@ impl EntityInputHandler for InputState {
             return;
         }
 
+        // Auto-close bracket: skip over closing bracket if it already exists at cursor
+        if self.mode.auto_close_brackets()
+            && new_text.len() == 1
+            && self.selected_range.is_empty()
+            && range_utf16.is_none()
+            && self.ime_marked_range.is_none()
+        {
+            let typed_char = new_text.chars().next().unwrap();
+            let cursor = self.cursor();
+
+            if Self::is_closing_bracket(typed_char) {
+                if let Some(char_at_cursor) = self.text.char_at(cursor) {
+                    if char_at_cursor == typed_char {
+                        let new_pos = cursor + typed_char.len_utf8();
+                        self.selected_range = (new_pos..new_pos).into();
+                        self.pause_blink_cursor(cx);
+                        cx.notify();
+                        return;
+                    }
+                }
+            }
+
+            // For quote characters, skip over if the same quote exists at cursor
+            if matches!(typed_char, '"' | '\'') {
+                if let Some(char_at_cursor) = self.text.char_at(cursor) {
+                    if char_at_cursor == typed_char {
+                        let new_pos = cursor + typed_char.len_utf8();
+                        self.selected_range = (new_pos..new_pos).into();
+                        self.pause_blink_cursor(cx);
+                        cx.notify();
+                        return;
+                    }
+                }
+            }
+        }
+
         if self.blink_cursor.read(cx).visible() {
             self.pause_blink_cursor(cx);
         }
@@ -2328,6 +2419,17 @@ impl EntityInputHandler for InputState {
                 self.range_from_utf16(&range)
             }))
             .unwrap_or(self.selected_range.into());
+
+        // Determine if we should auto-insert a closing bracket after this insertion
+        let auto_close_char = if self.mode.auto_close_brackets()
+            && new_text.len() == 1
+            && range.is_empty()
+        {
+            let typed_char = new_text.chars().next().unwrap();
+            Self::closing_bracket_for(typed_char)
+        } else {
+            None
+        };
 
         let old_text = self.text.clone();
         self.text.replace(range.clone(), new_text);
@@ -2349,6 +2451,13 @@ impl EntityInputHandler for InputState {
                     (new_text.len() + mask_text.len()).saturating_sub(pending_text.len());
                 new_offset = (range.start + new_text_len).min(mask_text.len());
             }
+        }
+
+        // Insert the closing bracket at the cursor position (after the opener)
+        if let Some(closer) = auto_close_char {
+            let closer_str = closer.to_string();
+            self.text
+                .replace(new_offset..new_offset, &closer_str);
         }
 
         self.push_history(&old_text, &range, &new_text);

@@ -216,6 +216,41 @@ impl InputState {
         self
     }
 
+    /// Set whether to auto-close brackets in code editor mode, default is true.
+    ///
+    /// When enabled, typing an opening bracket (`{`, `[`, `(`, `"`, `'`)
+    /// automatically inserts the matching closer. Typing a closing bracket
+    /// that already exists at the cursor skips over it instead of inserting
+    /// a duplicate.
+    ///
+    /// Only for [`InputMode::CodeEditor`] mode.
+    pub fn auto_close_brackets(mut self, enabled: bool) -> Self {
+        debug_assert!(self.mode.is_code_editor());
+        if let InputMode::CodeEditor {
+            auto_close_brackets,
+            ..
+        } = &mut self.mode
+        {
+            *auto_close_brackets = enabled;
+        }
+        self
+    }
+
+    pub(super) fn closing_bracket_for(ch: char) -> Option<char> {
+        match ch {
+            '{' => Some('}'),
+            '[' => Some(']'),
+            '(' => Some(')'),
+            '"' => Some('"'),
+            '\'' => Some('\''),
+            _ => None,
+        }
+    }
+
+    pub(super) fn is_closing_bracket(ch: char) -> bool {
+        matches!(ch, '}' | ']' | ')')
+    }
+
     pub(super) fn indent_inline(
         &mut self,
         _: &IndentInline,

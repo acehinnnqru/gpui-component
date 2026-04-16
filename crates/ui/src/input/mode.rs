@@ -42,6 +42,7 @@ pub(crate) enum InputMode {
         language: SharedString,
         indent_guides: bool,
         folding: bool,
+        auto_close_brackets: bool,
         highlighter: Rc<RefCell<Option<SyntaxHighlighter>>>,
         diagnostics: DiagnosticSet,
         parse_task: Rc<RefCell<Option<Task<()>>>>,
@@ -76,6 +77,7 @@ impl InputMode {
             line_number: true,
             indent_guides: true,
             folding: true,
+            auto_close_brackets: true,
             diagnostics: DiagnosticSet::new(&Rope::new()),
             parse_task: Rc::new(RefCell::new(None)),
         }
@@ -201,6 +203,17 @@ impl InputMode {
             InputMode::AutoGrow { max_rows, .. } => *max_rows,
             _ => usize::MAX,
         }
+    }
+
+    #[inline]
+    pub(super) fn auto_close_brackets(&self) -> bool {
+        matches!(
+            self,
+            InputMode::CodeEditor {
+                auto_close_brackets: true,
+                ..
+            }
+        )
     }
 
     /// Return false if the mode is not [`InputMode::CodeEditor`].
@@ -346,6 +359,7 @@ mod tests {
             line_number: true,
             indent_guides: true,
             folding: true,
+            auto_close_brackets: true,
             rows: 0,
             tab: Default::default(),
             language: "rust".into(),
