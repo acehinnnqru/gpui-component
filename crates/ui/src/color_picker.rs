@@ -7,7 +7,7 @@ use gpui::{
 use rust_i18n::t;
 
 use crate::{
-    ActiveTheme as _, Colorize as _, Icon, Selectable, Sizable, Size, StyleSized,
+    Anchor, ActiveTheme as _, Colorize as _, Icon, Selectable, Sizable, Size, StyleSized,
     actions::Confirm,
     divider::Divider,
     h_flex,

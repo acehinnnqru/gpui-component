@@ -505,6 +505,22 @@ impl TextElement {
         paths
     }
 
+    fn layout_highlight_ranges(
+        &self,
+        last_layout: &LastLayout,
+        bounds: &Bounds<Pixels>,
+        cx: &mut App,
+    ) -> Vec<(Path<Pixels>, Hsla)> {
+        let ranges = &self.state.read(cx).highlight_ranges;
+        let mut paths = Vec::with_capacity(ranges.len());
+        for (range, color) in ranges.iter() {
+            if let Some(path) = Self::layout_match_range(range.clone(), last_layout, bounds) {
+                paths.push((path, *color));
+            }
+        }
+        paths
+    }
+
     fn layout_selections(
         &self,
         last_layout: &LastLayout,
@@ -946,6 +962,152 @@ impl TextElement {
         }
     }
 
+    fn paint_inline_decorations(
+        &self,
+        last_layout: &LastLayout,
+        bounds: &Bounds<Pixels>,
+        _origin: Point<Pixels>,
+        line_height: Pixels,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let (decorations, is_masked) = {
+            let state = self.state.read(cx);
+            if state.inline_decorations.is_empty() || state.mode.is_single_line() && state.masked {
+                return;
+            }
+            (state.inline_decorations.clone(), state.masked)
+        };
+
+        if is_masked {
+            return;
+        }
+
+        let input_bg = cx.theme().input_background();
+        let style = window.text_style();
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        let tag_font_size = font_size;
+        let tag_h = line_height;
+        let tag_radius = px(4.);
+        let tag_pad_x = px(4.);
+        let line_number_width = last_layout.line_number_width;
+
+        for decoration in &decorations {
+            let start_ix = decoration.range.start;
+            let end_ix = decoration.range.end;
+
+            if start_ix >= last_layout.visible_range_offset.end
+                || end_ix <= last_layout.visible_range_offset.start
+            {
+                continue;
+            }
+
+            let visible_top = last_layout.visible_top;
+            let lines = &last_layout.lines;
+            let mut offset_y = visible_top;
+
+            for (prev_lines_offset, line) in last_layout
+                .visible_line_byte_offsets
+                .iter()
+                .zip(lines.iter())
+            {
+                let prev_lines_offset = *prev_lines_offset;
+                let line_size = line.size(line_height);
+
+                let line_start = prev_lines_offset;
+                let line_end = prev_lines_offset + line.len();
+
+                if start_ix < line_end && end_ix > line_start {
+                    let local_start = start_ix.saturating_sub(line_start);
+                    let local_end = end_ix.saturating_sub(line_start).min(line.len());
+
+                    let Some(start_pos) = line.position_for_index(
+                        local_start,
+                        last_layout,
+                        false,
+                    ) else {
+                        offset_y += line_size.height;
+                        continue;
+                    };
+                    let Some(end_pos) = line.position_for_index(
+                        local_end,
+                        last_layout,
+                        true,
+                    ) else {
+                        offset_y += line_size.height;
+                        continue;
+                    };
+
+                    let span_x = bounds.origin.x + line_number_width + start_pos.x;
+                    let span_y = bounds.origin.y + offset_y + start_pos.y;
+                    let span_w = end_pos.x - start_pos.x;
+
+                    if span_w <= px(0.) {
+                        offset_y += line_size.height;
+                        continue;
+                    }
+
+                    let erase_bounds = Bounds::new(
+                        point(span_x, span_y),
+                        size(span_w, line_height),
+                    );
+                    window.paint_quad(fill(erase_bounds, input_bg));
+
+                    let label_runs = vec![TextRun {
+                        len: decoration.label.len(),
+                        font: style.font(),
+                        color: decoration.text_color,
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    }];
+
+                    let shaped = window.text_system().shape_line(
+                        decoration.label.clone(),
+                        tag_font_size,
+                        &label_runs,
+                        None,
+                    );
+
+                    let tag_w = (shaped.width + tag_pad_x * 2.).min(span_w);
+                    let tag_x = span_x + (span_w - tag_w) / 2.;
+                    let tag_y = span_y + (line_height - tag_h) / 2.;
+
+                    let tag_bounds = Bounds::new(
+                        point(tag_x, tag_y),
+                        size(tag_w, tag_h),
+                    );
+
+                    window.paint_quad(quad(
+                        tag_bounds,
+                        Corners::all(tag_radius),
+                        decoration.bg_color,
+                        Edges::default(),
+                        transparent_black(),
+                        BorderStyle::default(),
+                    ));
+
+                    let max_text_w = tag_w - tag_pad_x * 2.;
+                    if max_text_w > px(0.) {
+                        let text_x = tag_x + tag_pad_x;
+                        _ = shaped.paint(
+                            point(text_x, span_y),
+                            line_height,
+                            TextAlign::Left,
+                            Some(max_text_w),
+                            window,
+                            cx,
+                        );
+                    }
+
+                    break;
+                }
+
+                offset_y += line_size.height;
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn layout_lines(
         state: &InputState,
@@ -1149,6 +1311,7 @@ pub(super) struct PrepaintState {
     selection_path: Option<Path<Pixels>>,
     hover_highlight_path: Option<Path<Pixels>>,
     search_match_paths: Vec<(Path<Pixels>, bool)>,
+    highlight_range_paths: Vec<(Path<Pixels>, Hsla)>,
     document_color_paths: Vec<(Path<Pixels>, Hsla)>,
     hover_definition_hitbox: Option<Hitbox>,
     indent_guides_path: Option<Path<Pixels>>,
@@ -1432,6 +1595,12 @@ impl Element for TextElement {
         let whitespace_indicators =
             Self::layout_whitespace_indicators(&state, text_size, &text_style, window, cx);
 
+        let runs = if state.text_color_ranges.is_empty() {
+            runs
+        } else {
+            split_runs_by_text_colors(0, &runs, &state.text_color_ranges)
+        };
+
         let lines = Self::layout_lines(
             &state,
             &display_text,
@@ -1546,6 +1715,7 @@ impl Element for TextElement {
         last_layout.cursor_bounds = cursor_bounds;
 
         let search_match_paths = self.layout_search_matches(&last_layout, &mut bounds, cx);
+        let highlight_range_paths = self.layout_highlight_ranges(&last_layout, &mut bounds, cx);
         let selection_path = self.layout_selections(&last_layout, &mut bounds, window, cx);
         let hover_highlight_path = self.layout_hover_highlight(&last_layout, &mut bounds, cx);
         let document_color_paths =
@@ -1617,6 +1787,7 @@ impl Element for TextElement {
             current_row,
             selection_path,
             search_match_paths,
+            highlight_range_paths,
             hover_highlight_path,
             hover_definition_hitbox,
             document_color_paths,
@@ -1711,6 +1882,11 @@ impl Element for TextElement {
         // Paint indent guides
         if let Some(path) = prepaint.indent_guides_path.take() {
             window.paint_path(path, cx.theme().border.opacity(0.85));
+        }
+
+        // Paint highlight ranges (e.g. variable spans)
+        for (path, color) in prepaint.highlight_range_paths.iter() {
+            window.paint_path(path.clone(), *color);
         }
 
         // Paint selections
@@ -1886,6 +2062,15 @@ impl Element for TextElement {
             cx,
         );
 
+        self.paint_inline_decorations(
+            &prepaint.last_layout,
+            &bounds,
+            origin,
+            line_height,
+            window,
+            cx,
+        );
+
         self.state.update(cx, |state, cx| {
             state.last_layout = Some(prepaint.last_layout.clone());
             state.last_bounds = Some(bounds);
@@ -1979,6 +2164,58 @@ pub(super) fn runs_for_range(
 
         if len > 0 {
             result.push(TextRun { len, ..run.clone() });
+        }
+
+        cursor = run_end;
+    }
+
+    result
+}
+
+fn split_runs_by_text_colors(
+    start_offset: usize,
+    runs: &[TextRun],
+    color_ranges: &[(Range<usize>, Hsla)],
+) -> Vec<TextRun> {
+    let mut result = vec![];
+
+    let mut cursor = start_offset;
+    for run in runs {
+        let mut run_start = cursor;
+        let run_end = cursor + run.len;
+
+        for (range, color) in color_ranges {
+            if run_end <= range.start || run_start >= range.end {
+                continue;
+            }
+
+            if run_start < range.start {
+                result.push(TextRun {
+                    len: range.start - run_start,
+                    ..run.clone()
+                });
+            }
+
+            let overlap_start = run_start.max(range.start);
+            let overlap_end = run_end.min(range.end);
+            let run_len = overlap_end.saturating_sub(overlap_start);
+            if run_len > 0 {
+                result.push(TextRun {
+                    len: run_len,
+                    color: *color,
+                    ..run.clone()
+                });
+
+                cursor = range.end;
+                run_start = cursor;
+            }
+        }
+
+        if run_end > cursor {
+            result.push(TextRun {
+                len: run_end - cursor,
+                ..run.clone()
+            });
         }
 
         cursor = run_end;

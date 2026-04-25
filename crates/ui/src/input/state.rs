@@ -5,7 +5,7 @@
 use anyhow::Result;
 use gpui::{
     Action, App, AppContext, Bounds, ClipboardItem, Context, Entity, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding,
+    EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement as _, IntoElement, KeyBinding,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
     Pixels, Point, Render, ScrollHandle, ScrollWheelEvent, ShapedLine, SharedString, Styled as _,
     Subscription, Task, UTF16Selection, Window, actions, div, point, prelude::FluentBuilder as _,
@@ -384,6 +384,32 @@ pub struct InputState {
 
     pub(super) _context_menu_task: Task<Result<()>>,
     pub(super) inline_completion: InlineCompletion,
+
+    /// Arbitrary highlight ranges painted as colored backgrounds behind text.
+    /// Each entry is a UTF-8 byte range into the text and an HSLA color.
+    pub(crate) highlight_ranges: Vec<(Range<usize>, Hsla)>,
+
+    /// Text foreground color overrides for specific ranges.
+    /// Each entry is a UTF-8 byte range and the desired text color.
+    pub(crate) text_color_ranges: Vec<(Range<usize>, Hsla)>,
+
+    /// Inline decorations that replace text spans with a chip overlay.
+    /// When the cursor is outside a decoration's range, the chip is drawn
+    /// on top of the original text showing a truncated display label.
+    pub(crate) inline_decorations: Vec<InlineDecoration>,
+}
+
+/// A decoration that overlays a text range with a styled chip.
+#[derive(Clone, Debug)]
+pub struct InlineDecoration {
+    /// UTF-8 byte range of the source text this decoration covers.
+    pub range: Range<usize>,
+    /// Short label displayed inside the chip (e.g. truncated resolved value).
+    pub label: SharedString,
+    /// Background color for the chip.
+    pub bg_color: Hsla,
+    /// Text color for the chip label.
+    pub text_color: Hsla,
 }
 
 impl EventEmitter<InputEvent> for InputState {}
@@ -469,6 +495,9 @@ impl InputState {
             _pending_update: false,
             inline_completion: InlineCompletion::default(),
             cursor_line_end_affinity: false,
+            highlight_ranges: Vec::new(),
+            text_color_ranges: Vec::new(),
+            inline_decorations: Vec::new(),
         }
     }
 
@@ -722,6 +751,27 @@ impl InputState {
 
         self.history.clear();
         cx.notify();
+    }
+
+    /// Set colored highlight ranges to paint behind text.
+    ///
+    /// Each entry is a UTF-8 byte range and an HSLA background color.
+    /// Ranges outside the text length are silently clamped.
+    pub fn set_highlight_ranges(&mut self, ranges: Vec<(Range<usize>, Hsla)>) {
+        self.highlight_ranges = ranges;
+    }
+
+    /// Set text foreground color overrides for specific byte ranges.
+    pub fn set_text_color_ranges(&mut self, ranges: Vec<(Range<usize>, Hsla)>) {
+        self.text_color_ranges = ranges;
+    }
+
+    /// Set inline decorations that render chip overlays over text ranges.
+    ///
+    /// When the cursor is not inside a decoration's range, a chip with the
+    /// decoration's label and styling is painted on top of the underlying text.
+    pub fn set_inline_decorations(&mut self, decorations: Vec<InlineDecoration>) {
+        self.inline_decorations = decorations;
     }
 
     /// Insert text at the current cursor position.

@@ -7,6 +7,7 @@ use gpui::{
     Subscription, Window, anchored, deferred, div, prelude::FluentBuilder, px,
 };
 
+use crate::Anchor;
 use crate::menu::PopupMenu;
 
 /// A extension trait for adding a context menu to an element.
@@ -190,7 +191,7 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
                                             anchored()
                                                 .position(position)
                                                 .snap_to_window_with_margin(px(8.))
-                                                .anchor(anchor)
+                                                .anchor(anchor.into())
                                                 .when_some(menu_view, |this, menu| {
                                                     // Focus the menu, so that can be handle the action.
                                                     if !menu
