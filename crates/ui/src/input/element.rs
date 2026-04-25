@@ -1047,12 +1047,6 @@ impl TextElement {
                         continue;
                     }
 
-                    let erase_bounds = Bounds::new(
-                        point(span_x, span_y),
-                        size(span_w, line_height),
-                    );
-                    window.paint_quad(fill(erase_bounds, input_bg));
-
                     let label_runs = vec![TextRun {
                         len: decoration.label.len(),
                         font: style.font(),
@@ -1069,9 +1063,18 @@ impl TextElement {
                         None,
                     );
 
-                    let tag_w = span_w;
+                    let content_w = shaped.width + tag_pad_x * 2.;
+                    let max_tag_w = span_w.max(px(160.));
+                    let tag_w = content_w.min(max_tag_w);
                     let tag_x = span_x;
                     let tag_y = span_y + (line_height - tag_h) / 2.;
+
+                    let erase_w = span_w.max(tag_w);
+                    let erase_bounds = Bounds::new(
+                        point(span_x, span_y),
+                        size(erase_w, line_height),
+                    );
+                    window.paint_quad(fill(erase_bounds, input_bg));
 
                     let tag_bounds = Bounds::new(
                         point(tag_x, tag_y),
@@ -1089,7 +1092,7 @@ impl TextElement {
 
                     let max_text_w = tag_w - tag_pad_x * 2.;
                     if max_text_w > px(0.) {
-                        let text_x = tag_x + (tag_w - shaped.width.min(max_text_w)) / 2.;
+                        let text_x = tag_x + tag_pad_x;
                         _ = shaped.paint(
                             point(text_x, span_y),
                             line_height,

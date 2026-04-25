@@ -34,11 +34,11 @@ use crate::input::{
     HoverDefinition, InlineCompletion, Lsp, Position, RopeExt as _, Selection,
     display_map::LineLayout,
     element::RIGHT_MARGIN,
-    popovers::{ContextMenu, DiagnosticPopover, HoverPopover, InputContextMenu},
+    popovers::{ContextMenu, DiagnosticPopover, HoverPopover, InputContextMenu, Popover},
     search::{self, SearchPanel},
 };
 use crate::menu::PopupMenu;
-use crate::{Root, history::History};
+use crate::{ActiveTheme as _, Root, history::History};
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = input, no_json)]
@@ -397,6 +397,10 @@ pub struct InputState {
     /// When the cursor is outside a decoration's range, the chip is drawn
     /// on top of the original text showing a truncated display label.
     pub(crate) inline_decorations: Vec<InlineDecoration>,
+
+    /// Active decoration tooltip shown on hover over a truncated inline decoration.
+    /// Tuple of (byte range of the decoration, full tooltip text).
+    pub(crate) active_decoration_tooltip: Option<(Range<usize>, SharedString)>,
 }
 
 /// A decoration that overlays a text range with a styled chip.
@@ -410,6 +414,8 @@ pub struct InlineDecoration {
     pub bg_color: Hsla,
     /// Text color for the chip label.
     pub text_color: Hsla,
+    /// Full text shown in a tooltip when the label is truncated on hover.
+    pub tooltip: Option<SharedString>,
 }
 
 impl EventEmitter<InputEvent> for InputState {}
@@ -498,6 +504,7 @@ impl InputState {
             highlight_ranges: Vec::new(),
             text_color_ranges: Vec::new(),
             inline_decorations: Vec::new(),
+            active_decoration_tooltip: None,
         }
     }
 
@@ -1541,13 +1548,31 @@ impl InputState {
             .unwrap_or(false);
 
         if !within_bounds {
-            // Clear hover when mouse leaves the input
             self.clear_hover_state(cx);
+            if self.active_decoration_tooltip.is_some() {
+                self.active_decoration_tooltip = None;
+                cx.notify();
+            }
             return;
         }
 
-        // Show diagnostic popover on mouse move
         let offset = self.index_for_mouse_position(event.position);
+
+        let new_tooltip = self
+            .inline_decorations
+            .iter()
+            .find(|d| d.range.contains(&offset) && d.tooltip.is_some())
+            .map(|d| (d.range.clone(), d.tooltip.clone().unwrap()));
+        let tooltip_changed = match (&self.active_decoration_tooltip, &new_tooltip) {
+            (Some((r1, _)), Some((r2, _))) => r1 != r2,
+            (None, None) => false,
+            _ => true,
+        };
+        if tooltip_changed {
+            self.active_decoration_tooltip = new_tooltip;
+            cx.notify();
+        }
+
         self.handle_mouse_move(offset, event, window, cx);
 
         if self.mode.is_code_editor() {
@@ -2050,6 +2075,7 @@ impl InputState {
 
         self.hover_popover = None;
         self.diagnostic_popover = None;
+        self.active_decoration_tooltip = None;
         self.context_menu_content = None;
         self.clear_inline_completion(cx);
         self.blink_cursor.update(cx, |cursor, cx| {
@@ -2717,6 +2743,24 @@ impl Render for InputState {
             self._pending_update = false;
         }
 
+        let decoration_tooltip = self
+            .active_decoration_tooltip
+            .as_ref()
+            .map(|(range, text)| {
+                let text = text.clone();
+                Popover::new(
+                    "decoration-tooltip",
+                    cx.entity().clone(),
+                    range.clone(),
+                    move |_window, cx| {
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().foreground)
+                            .child(text.clone())
+                    },
+                )
+            });
+
         div()
             .id("input-state")
             .flex_1()
@@ -2727,6 +2771,7 @@ impl Render for InputState {
             .children(self.diagnostic_popover.clone())
             .children(self.context_menu_content.as_ref().map(|menu| menu.render()))
             .children(self.hover_popover.clone())
+            .children(decoration_tooltip)
     }
 }
 
