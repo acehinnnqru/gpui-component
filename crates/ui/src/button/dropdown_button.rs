@@ -6,7 +6,7 @@ use gpui::{
 };
 
 use crate::{
-    Anchor, Disableable, IconName, Selectable, Sizable, Size, StyledExt as _,
+    Disableable, IconName, Selectable, Sizable, Size, StyledExt as _,
     menu::{DropdownMenu, PopupMenu},
     tooltip::ComponentTooltip,
 };

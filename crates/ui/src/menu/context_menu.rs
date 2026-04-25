@@ -7,7 +7,6 @@ use gpui::{
     Subscription, Window, anchored, deferred, div, prelude::FluentBuilder, px,
 };
 
-use crate::Anchor;
 use crate::menu::PopupMenu;
 
 /// A extension trait for adding a context menu to an element.

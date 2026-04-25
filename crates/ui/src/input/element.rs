@@ -1,11 +1,11 @@
 use gpui::Corners;
 use gpui::Half;
-use gpui::{App, Bounds, Element, ElementId, ElementInputHandler, Entity, GlobalElementId};
+use gpui::{App, BorderStyle, Bounds, Edges, Element, ElementId, ElementInputHandler, Entity, GlobalElementId};
 use gpui::{
     HighlightStyle, Hitbox, HitboxBehavior, Hsla, InteractiveElement, IntoElement, LayoutId,
     MouseButton, MouseMoveEvent, Path, Pixels, Point, ShapedLine, SharedString, Size, Style,
-    Styled as _, TextAlign, TextRun, TextStyle, UnderlineStyle, Window, fill, point, px, relative,
-    size,
+    Styled as _, TextAlign, TextRun, TextStyle, UnderlineStyle, Window, fill, point, px, quad, relative,
+    size, transparent_black,
 };
 use ropey::Rope;
 use smallvec::SmallVec;
