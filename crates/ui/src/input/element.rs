@@ -1065,7 +1065,7 @@ impl TextElement {
 
                     let content_w = shaped.width + tag_pad_x * 2.;
                     let max_tag_w = span_w.max(px(160.));
-                    let tag_w = content_w.min(max_tag_w);
+                    let tag_w = content_w.max(span_w).min(max_tag_w);
                     let tag_x = span_x;
                     let tag_y = span_y + (line_height - tag_h) / 2.;
 
@@ -1092,7 +1092,7 @@ impl TextElement {
 
                     let max_text_w = tag_w - tag_pad_x * 2.;
                     if max_text_w > px(0.) {
-                        let text_x = tag_x + tag_pad_x;
+                        let text_x = tag_x + (tag_w - shaped.width) / 2.;
                         _ = shaped.paint(
                             point(text_x, span_y),
                             line_height,
